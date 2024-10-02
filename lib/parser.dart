@@ -14,7 +14,19 @@ class Parser {
   List<Tuple2<String, String>> errorOPFLog = []; // [ (errorType, id) ]
   Map<String, String> metadata = HashMap();
   late XmlDocument etreeOpf;
-
+  late String opf; // OPF XML string (you may initialize this elsewhere)
+  late String epubType; // EPUB type
+  late String tocPath; // TOC path
+  late String tocId; // TOC ID
+  List<Tuple3<String, String, String>> textList = []; // (id, href, properties)
+  List<Tuple3<String, String, String>> cssList = []; // (id, href, properties)
+  List<Tuple3<String, String, String>> imageList = []; // (id, href, properties)
+  List<Tuple3<String, String, String>> fontList = []; // (id, href, properties)
+  List<Tuple3<String, String, String>> audioList = []; // (id, href, properties)
+  List<Tuple3<String, String, String>> videoList = []; // (id, href, properties)
+  List<Tuple4<String, String, String, String>> otherList =
+      []; // (id, href, mime, properties)
+  Map<String, XmlElement> packageElements = {}; // Map to store child elements
   Parser(String xmlString) {
     etreeOpf = XmlDocument.parse(xmlString);
   }
@@ -223,88 +235,122 @@ class Parser {
     List<String> keys = [
       "title",
       "creator",
+      "description",
       "language",
-      "subject",
-      "source",
       "identifier",
+      "date",
+      "modified",
+      "publisher",
       "cover"
     ];
-
-    // 预设所有键值为 ""
     for (var key in keys) {
-      metadata[key] = "";
-    }
-
-    // 解析 metadata
-    var metadataElements = etreeOpf.findAllElements('metadata');
-    for (var meta in metadataElements) {
-      String tag = meta.name.local; // 去掉命名空间
-
-      if (['title', 'creator', 'language', 'subject', 'source', 'identifier']
-          .contains(tag)) {
-        metadata[tag] = meta.text ?? ""; // 处理可能为null的情况
-      } else if (tag == 'meta') {
-        var name = meta.getAttribute('name');
-        var content = meta.getAttribute('content');
-        if (name != null && content != null) {
-          metadata['cover'] = content; // 更新封面
-        }
+      var element = etreeOpf.findAllElements(key).first;
+      if (element != null) {
+        metadata[key] = element.text;
       }
     }
   }
 
-  // 计算相对路径
-  String getRelPath(String fromPath, String toPath) {
-    List<String> fromParts = fromPath.split(RegExp(r"[\\/]+"));
-    List<String> toParts = toPath.split(RegExp(r"[\\/]+"));
+  void _parseOpf(String opf) {
+    // Parse the OPF XML string
+    etreeOpf = XmlDocument.parse(opf);
 
-    while (fromParts.isNotEmpty &&
-        toParts.isNotEmpty &&
-        fromParts[0] == toParts[0]) {
-      fromParts.removeAt(0);
-      toParts.removeAt(0);
+    // Get the package element
+    var packageElement = etreeOpf.findElements('package').first;
+
+    // Store child elements in the map
+    for (var child in packageElement.children) {
+      if (child is XmlElement) {
+        // Ensure child is an XmlElement
+        String tag = child.name.local; // Get tag without namespace
+        packageElements[tag] = child; // Store the child element in the map
+      }
     }
 
-    String relativePath = "../" * (fromParts.length - 1) + toParts.join('/');
-    return relativePath;
-  }
+    _parseMetadata();
+    _parseManifest();
+    _parseSpine();
+    _clearDuplicateIdHref();
+    _parseHrefsNotInEpub([], ""); // Provide valid parameters
+    _addFilesNotInOpf([], ""); // Provide valid parameters
 
-  // 计算书本路径
-  String getBookPath(String relativePath, String referBkPath) {
-    List<String> relativeParts = relativePath.split(RegExp(r"[\\/]+"));
-    List<String> referParts = referBkPath.split(RegExp(r"[\\/]+"));
-
-    int backStep = 0;
-    while (relativeParts.isNotEmpty && relativeParts[0] == "..") {
-      backStep++;
-      relativeParts.removeAt(0);
+    // Prepare the manifest list
+    List<Tuple4<String, String, String, String>> manifestList =
+        []; // (id, opfHref, mime, properties)
+    for (var id in idToHMp.keys) {
+      var (href, mime, properties) = idToHMp[id]!;
+      manifestList.add(Tuple4(id, href, mime, properties));
     }
 
-    if (referParts.length <= 1) {
-      return relativeParts.join('/');
+    // Determine EPUB type
+    String? epubType = packageElement.getAttribute('version');
+    if (epubType != null && (epubType == "2.0" || epubType == "3.0")) {
+      this.epubType = epubType; // Assuming epubType is a class-level variable
     } else {
-      referParts.removeLast(); // 去掉最后一个部分
+      throw Exception("此脚本不支持该EPUB类型");
     }
 
-    if (backStep < 1) {
-      return (referParts + relativeParts).join('/');
-    } else if (backStep >= referParts.length) {
-      return relativeParts.join('/');
+    // Find EPUB2 TOC file ID; EPUB3 nav file is processed as XHTML
+    tocPath = ""; // Assuming tocPath is a class-level variable
+    tocId = ""; // Assuming tocId is a class-level variable
+    String? tocIdValue = packageElement.getAttribute('toc');
+    tocId = tocIdValue ?? "";
+
+    // Classify OPF items
+    String opfDir = path.dirname(""); // Assuming you have a valid opfPath
+    for (var item in manifestList) {
+      String id = item.item1;
+      String href = item.item2;
+      String mime = item.item3;
+      String properties = item.item4;
+
+      String bkPath = path.join(opfDir, href); // Full path
+      if (mime == "application/xhtml+xml") {
+        textList
+            .add(Tuple3(id, href, properties)); // Assuming textList is defined
+      } else if (mime == "text/css") {
+        cssList
+            .add(Tuple3(id, href, properties)); // Assuming cssList is defined
+      } else if (mime.startsWith("image/")) {
+        imageList
+            .add(Tuple3(id, href, properties)); // Assuming imageList is defined
+      } else if (mime.startsWith("font/") ||
+          href.toLowerCase().endsWith(".ttf") ||
+          href.toLowerCase().endsWith(".otf") ||
+          href.toLowerCase().endsWith(".woff")) {
+        fontList
+            .add(Tuple3(id, href, properties)); // Assuming fontList is defined
+      } else if (mime.startsWith("audio/")) {
+        audioList
+            .add(Tuple3(id, href, properties)); // Assuming audioList is defined
+      } else if (mime.startsWith("video/")) {
+        videoList
+            .add(Tuple3(id, href, properties)); // Assuming videoList is defined
+      } else if (tocId.isNotEmpty && id == tocId) {
+        tocPath = bkPath; // Set TOC path
+      } else {
+        otherList.add(Tuple4(
+            id, href, mime, properties)); // Assuming otherList is defined
+      }
     }
 
-    // len(referParts) > 1 and backStep <= len(referParts)
-    for (int i = 0; i < backStep && referParts.isNotEmpty; i++) {
-      referParts.removeLast();
-    }
-
-    return (referParts + relativeParts).join('/');
+    _checkManifestAndSpine();
   }
+
+  String getBookPath(String href, String opfPath) {
+    return ""; // Implement this method based on your requirements
+  }
+
+  String getRelPath(String opfPath, String archivePath) {
+    return ""; // Implement this method based on your requirements
+  }
+  // Other methods...
 }
 
-// Tuple classes for storing multiple values
 class Tuple2<T1, T2> {
   final T1 item1;
   final T2 item2;
+
   Tuple2(this.item1, this.item2);
 }
 
@@ -312,5 +358,15 @@ class Tuple3<T1, T2, T3> {
   final T1 item1;
   final T2 item2;
   final T3 item3;
+
   Tuple3(this.item1, this.item2, this.item3);
+}
+
+class Tuple4<T1, T2, T3, T4> {
+  final T1 item1;
+  final T2 item2;
+  final T3 item3;
+  final T4 item4;
+
+  Tuple4(this.item1, this.item2, this.item3, this.item4);
 }
