@@ -3,6 +3,8 @@ import 'dart:core';
 import 'package:xml/xml.dart';
 import 'dart:convert';
 import 'package:path/path.dart' as path;
+import 'model/resourceGroup.dart';
+import 'utils.dart';
 
 class Parser {
   Map<String, Tuple3<String, String, String>> idToHMp =
@@ -18,24 +20,36 @@ class Parser {
   late String epubType; // EPUB type
   late String tocPath; // TOC path
   late String tocId; // TOC ID
-  List<Tuple3<String, String, String>> textList = []; // (id, href, properties)
-  List<Tuple3<String, String, String>> cssList = []; // (id, href, properties)
-  List<Tuple3<String, String, String>> imageList = []; // (id, href, properties)
-  List<Tuple3<String, String, String>> fontList = []; // (id, href, properties)
-  List<Tuple3<String, String, String>> audioList = []; // (id, href, properties)
-  List<Tuple3<String, String, String>> videoList = []; // (id, href, properties)
-  List<Tuple4<String, String, String, String>> otherList =
-      []; // (id, href, mime, properties)
+  ResourceGroup resourceGroup = ResourceGroup(
+    textList: [],
+    cssList: [],
+    imageList: [],
+    fontList: [],
+    audioList: [],
+    videoList: [],
+    otherList: [],
+  );
+
   Map<String, XmlElement> packageElements = {}; // Map to store child elements
-  Parser(String xmlString) {
+  Parser(String xmlString, this.opfPath, this.namelist) {
     etreeOpf = XmlDocument.parse(xmlString);
+    _parseOpf();
   }
+  late String opfPath;
+  late List<String> namelist = [];
 
   void _parseManifest() {
     bool ifError = false;
-
-    var manifestElements = etreeOpf.findAllElements('manifest');
-    for (var item in manifestElements) {
+    var manifestElements = packageElements['manifest'];
+    if (manifestElements == null) {
+      print("No metadata found in package elements.");
+      return;
+    }
+    // var manifestElements = etreeOpf.findAllElements('manifest');
+    for (var item in manifestElements.children) {
+      if (item is! XmlElement) {
+        continue;
+      }
       String? id;
       String? href;
 
@@ -66,7 +80,16 @@ class Parser {
   }
 
   void _parseSpine() {
-    for (var itemRef in etreeOpf.findAllElements('spine')) {
+    var spinedataElement = packageElements['spine'];
+    if (spinedataElement == null) {
+      print("No metadata found in package elements.");
+      return;
+    }
+
+    for (var itemRef in spinedataElement.children) {
+      if (itemRef is! XmlElement) {
+        continue;
+      }
       String? sid = itemRef.getAttribute('idref');
       String linear = itemRef.getAttribute('linear') ?? "";
       String properties = itemRef.getAttribute('properties') ?? "";
@@ -130,7 +153,7 @@ class Parser {
     }
   }
 
-  void _parseHrefsNotInEpub(List<String> namelist, String opfPath) {
+  void _parseHrefsNotInEpub() {
     List<String> delId = [];
     for (var entry in idToHref.entries) {
       String id = entry.key;
@@ -149,7 +172,7 @@ class Parser {
     }
   }
 
-  void _addFilesNotInOpf(List<String> namelist, String opfPath) {
+  void _addFilesNotInOpf() {
     List<String> hrefsNotInOpf = [];
     List<String> validExtensions = [
       '.html',
@@ -232,28 +255,41 @@ class Parser {
   }
 
   void _parseMetadata() {
-    List<String> keys = [
-      "title",
-      "creator",
-      "description",
-      "language",
-      "identifier",
-      "date",
-      "modified",
-      "publisher",
-      "cover"
-    ];
-    for (var key in keys) {
-      var element = etreeOpf.findAllElements(key).first;
-      if (element != null) {
-        metadata[key] = element.text;
+    var metadataElement = packageElements['metadata'];
+    if (metadataElement == null) {
+      print("No metadata found in package elements.");
+      return;
+    }
+
+    // 正则表达式去除命名空间前缀
+    RegExp tagRegExp = RegExp(r'\{.*?\}');
+
+    // 遍历 metadata 子元素
+    for (var meta in metadataElement.children) {
+      if (meta is XmlElement) {
+        // 去除 namespace 并获取标签名称
+        String tag = meta.name.toString().replaceAll(tagRegExp, '');
+        String tagWithoutNamespace = tag.replaceAll(RegExp(r'.*:'), '');
+
+        // 处理 title、creator、language、subject、source、identifier
+        if (["title", "creator", "language", "subject", "source", "identifier"]
+            .contains(tagWithoutNamespace)) {
+          metadata[tagWithoutNamespace] = meta.text;
+        }
+        // 处理 meta 标签中的封面信息
+        else if (tag == "meta") {
+          var nameAttr = meta.getAttribute('name');
+          var contentAttr = meta.getAttribute('content');
+          if (nameAttr == 'cover' && contentAttr != null) {
+            metadata['cover'] = contentAttr;
+          }
+        }
       }
     }
   }
 
-  void _parseOpf(String opf) {
+  void _parseOpf() {
     // Parse the OPF XML string
-    etreeOpf = XmlDocument.parse(opf);
 
     // Get the package element
     var packageElement = etreeOpf.findElements('package').first;
@@ -271,14 +307,17 @@ class Parser {
     _parseManifest();
     _parseSpine();
     _clearDuplicateIdHref();
-    _parseHrefsNotInEpub([], ""); // Provide valid parameters
-    _addFilesNotInOpf([], ""); // Provide valid parameters
+    _parseHrefsNotInEpub(); // Provide valid parameters
+    _addFilesNotInOpf(); // Provide valid parameters
 
     // Prepare the manifest list
     List<Tuple4<String, String, String, String>> manifestList =
         []; // (id, opfHref, mime, properties)
     for (var id in idToHMp.keys) {
-      var (href, mime, properties) = idToHMp[id]!;
+      var tuple = idToHMp[id]!;
+      var href = tuple.item1; // Accessing the first item of the tuple
+      var mime = tuple.item2; // Accessing the second item of the tuple
+      var properties = tuple.item3; // Accessing the third item of the tuple
       manifestList.add(Tuple4(id, href, mime, properties));
     }
 
@@ -306,45 +345,44 @@ class Parser {
 
       String bkPath = path.join(opfDir, href); // Full path
       if (mime == "application/xhtml+xml") {
-        textList
-            .add(Tuple3(id, href, properties)); // Assuming textList is defined
+        // 添加到 textList
+        resourceGroup.addText([id, href, properties]);
       } else if (mime == "text/css") {
-        cssList
-            .add(Tuple3(id, href, properties)); // Assuming cssList is defined
+        // 添加到 cssList
+        resourceGroup.addCss([id, href, properties]);
       } else if (mime.startsWith("image/")) {
-        imageList
-            .add(Tuple3(id, href, properties)); // Assuming imageList is defined
+        // 添加到 imageList
+        resourceGroup.addImage([id, href, properties]);
       } else if (mime.startsWith("font/") ||
           href.toLowerCase().endsWith(".ttf") ||
           href.toLowerCase().endsWith(".otf") ||
           href.toLowerCase().endsWith(".woff")) {
-        fontList
-            .add(Tuple3(id, href, properties)); // Assuming fontList is defined
+        // 添加到 fontList
+        resourceGroup.addFont([id, href, properties]);
       } else if (mime.startsWith("audio/")) {
-        audioList
-            .add(Tuple3(id, href, properties)); // Assuming audioList is defined
+        // 添加到 audioList
+        resourceGroup.addAudio([id, href, properties]);
       } else if (mime.startsWith("video/")) {
-        videoList
-            .add(Tuple3(id, href, properties)); // Assuming videoList is defined
+        // 添加到 videoList
+        resourceGroup.addVideo([id, href, properties]);
       } else if (tocId.isNotEmpty && id == tocId) {
-        tocPath = bkPath; // Set TOC path
+        // 设置 TOC 路径
+        tocPath = bkPath;
       } else {
-        otherList.add(Tuple4(
-            id, href, mime, properties)); // Assuming otherList is defined
+        // 添加到 otherList
+        resourceGroup.addOther([id, href, mime, properties]);
       }
     }
 
     _checkManifestAndSpine();
   }
 
-  String getBookPath(String href, String opfPath) {
-    return ""; // Implement this method based on your requirements
+  String getOpf() {
+    return opf;
   }
-
-  String getRelPath(String opfPath, String archivePath) {
-    return ""; // Implement this method based on your requirements
+  ResourceGroup getResourceGroup() {
+    return resourceGroup;
   }
-  // Other methods...
 }
 
 class Tuple2<T1, T2> {
