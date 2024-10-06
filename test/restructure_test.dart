@@ -8,7 +8,7 @@ import 'package:dart_epubtool/restructure.dart';
 
 void main() {
   // 替换为你本地的 EPUB 文件路径
-  String epubFilePath = './data/01.epub';
+  String epubFilePath = './data/义妹生活 - 10.epub';
 
   try {
     // 创建 Epub 实例
@@ -27,7 +27,7 @@ void main() {
     Restructure restructure = Restructure(epubSrc: epubFilePath,epubMeta:
     epubMeta, resourceGroup: resourceGroup,sourceEpubArchive: epub.epub,idToHMp: parser.idToHMp,opf:opf);
     restructure.restructure();
-    // print(restructure.rePathMap);
+
 
   } catch (e) {
      print("错误: $e");

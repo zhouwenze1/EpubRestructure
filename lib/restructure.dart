@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:dart_epubtool/utils.dart';
 import 'package:path/path.dart' as p;
-
+import 'dart:convert' as convert;
 import 'package:path/path.dart' as path;
 import 'package:archive/archive.dart';
 import 'model/epubMeta.dart';
@@ -75,7 +75,7 @@ class Restructure {
       if (file.isFile && file.name == fileName) {
         try {
           // 尝试以 UTF-8 解码文件内容
-          return utf8.decode(file.content as List<int>);
+          return convert.utf8.decode(file.content);
         } catch (e) {
           // 捕获解码错误并返回 null 或处理方式
           print('Error decoding file $fileName: $e');
@@ -90,8 +90,14 @@ class Restructure {
   /// 将文件内容写入目标 Archive 对象
   void writeToArchive(Archive archive, String fileName, String content) {
     // 将文件添加到目标 Archive
-    final archiveFile =
-    ArchiveFile(fileName, content.length, utf8.encode(content));
+
+    // 使用 UTF-8 编码将内容转换为字节数组
+    final contentBytes = utf8.encode(content);
+
+    // 创建一个新的 ArchiveFile，指定文件名、内容长度和内容的字节数组
+    final archiveFile = ArchiveFile(fileName, contentBytes.length, contentBytes);
+
+    // 将 ArchiveFile 添加到 Archive 中
     archive.addFile(archiveFile);
   }
   void writeImageToArchive(Archive archive, String fileName, Uint8List imageData) {
@@ -178,13 +184,15 @@ class Restructure {
     //     // 将修改后的内容写入到目标 Archive
     //     // targetEpubArchive.addFile(ArchiveFile(file.name, modifiedContent.length, utf8.encode(modifiedContent)));
     //   }
-    String? mimetype = readFileFromArchive("mimetype");
-    if (mimetype != null) {
-      targetEpubArchive.addFile(
-          ArchiveFile("mimetype", mimetype.length, utf8.encode(mimetype)));
-    } else {
-      print("No mimetype found in source EPUB.");
-    }
+    // String? mimetype = readFileFromArchive("mimetype");
+    // if (mimetype != null) {
+    //   targetEpubArchive.addFile(
+    //       ArchiveFile("mimetype", mimetype.length, utf8.encode(mimetype)));
+    // } else {
+    //   print("No mimetype found in source EPUB.");
+    // }
+    targetEpubArchive.addFile(ArchiveFile.noCompress(
+        'mimetype', 20, convert.utf8.encode('application/epub+zip')));
     String? metainfData = readFileFromArchive("META-INF/container.xml");
     final RegExp regExp = RegExp(
       r'<rootfile[^>]*media-type="application/oebps-[^>]*/>',
@@ -193,12 +201,24 @@ class Restructure {
     );
 
     if (metainfData != null) {
-      String updatedData = metainfData.replaceAll(
+      String containerData = metainfData.replaceAll(
         regExp,
         '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>',
       );
-      targetEpubArchive.addFile(ArchiveFile("META-INF/container.xml",
-          updatedData.length, utf8.encode(updatedData)));
+      // targetEpubArchive.addFile(ArchiveFile("META-INF/container.xml",
+      //     metainfData.length, utf8.encode(metainfData)));
+      targetEpubArchive.addFile(ArchiveFile('META-INF/container.xml', containerData.length,
+          convert.utf8.encode(containerData)));
+
+
+
+
+
+
+
+
+
+
     } else {
       print("No META-INF/container.xml found in source EPUB.");
     }
@@ -243,12 +263,12 @@ class Restructure {
       if (!doctypeCheck.hasMatch(text)) {
         // 定义用于替换的正则表达式
         // 定义正则表达式
-        RegExp regex = RegExp(r"(<\?xml.*?>)\n*");
+        RegExp xmlRegex = RegExp(r"(<\?xml.*?>)\n*");
 
         // 执行替换
         text = text.replaceFirst(
-            regex,
-            r'''$1
+            xmlRegex,
+            r'''
         <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
           "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
                 ''');
@@ -339,7 +359,7 @@ class Restructure {
     manifestText += "\n  </manifest>";
 
     RegExp manifestExp = RegExp(r"<manifest.*?>.*?</manifest>", dotAll: true);
-    opf = opf.replaceFirst(regExp, manifestText);
+    opf = opf.replaceFirst(manifestExp, manifestText);
 
     RegExp referExp = RegExp(r'''(<reference[^>]*href=([\'\"]))(.*?)(\2[^>]*/>)''');
 
@@ -446,6 +466,26 @@ class Restructure {
     return manifestText;
   }
 
+  // void saveTargetEpub() {
+  //   var epubName = p.basename(epubSrc);
+  //   var ebookRoot = p.dirname(epubSrc);
+  //
+  //   // 目标文件路径
+  //   String targetFilePath =
+  //   path.join(ebookRoot, epubName.replaceAll(".epub", "_reformat.epub"));
+  //
+  //   // 创建 ZIP 文件
+  //   var zipData = ZipEncoder().encode(targetEpubArchive);
+  //
+  //   // 将压缩数据写入文件
+  //   File(targetFilePath)
+  //     ..createSync(recursive: true)
+  //     ..writeAsBytesSync(zipData!); // 压缩数据写入目标文件
+  //
+  //   // 将 archive 压缩成 zip 并写入文件
+  //
+  //   print("ZIP 文件已创建：$targetFilePath");
+  // }
   void saveTargetEpub() {
     var epubName = p.basename(epubSrc);
     var ebookRoot = p.dirname(epubSrc);
@@ -455,12 +495,12 @@ class Restructure {
     path.join(ebookRoot, epubName.replaceAll(".epub", "_reformat.epub"));
 
     // 创建 ZIP 文件
-    var zipData = ZipEncoder().encode(targetEpubArchive);
+    var bytes  = ZipEncoder().encode(targetEpubArchive);
 
     // 将压缩数据写入文件
-    File(targetFilePath)
-      ..createSync(recursive: true)
-      ..writeAsBytesSync(zipData!); // 压缩数据写入目标文件
+    final outputFile = File(targetFilePath);
+    outputFile.writeAsBytesSync(bytes!);
+
 
     // 将 archive 压缩成 zip 并写入文件
 
@@ -537,7 +577,8 @@ class Restructure {
       return match.group(0)!; // 返回原始匹配
     }
 
-    // 检查 href 后缀并构建新的路径
+    // 检查 href 后缀并构建新的路径manifest
+
     if (href
         .toLowerCase()
         .endsWith('.(jpg|jpeg|png|bmp|gif|webp)')) {

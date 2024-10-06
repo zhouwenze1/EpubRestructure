@@ -7,7 +7,7 @@ import 'model/resourceGroup.dart';
 import 'utils.dart';
 
 class Parser {
-  Map<String, Tuple3<String, String, String>> idToHMp =
+  Map<String, List<dynamic>> idToHMp =
       {}; // { id : (href, mime, properties) }
   Map<String, String> idToHref = {}; // { id : href.lower }
   Map<String, String> hrefToId = {}; // { href.lower : id }
@@ -69,7 +69,8 @@ class Parser {
       String? mime = item.getAttribute('media-type');
       String properties = item.getAttribute('properties') ?? "";
 
-      idToHMp[id!] = Tuple3(href!, mime ?? "", properties);
+      // idToHMp[id!] = Tuple3(href!, mime ?? "", properties);
+      idToHMp[id!] = [href!, mime ?? "", properties];
       idToHref[id] = href!.toLowerCase();
       hrefToId[href.toLowerCase()] = id;
     }
@@ -111,11 +112,14 @@ class Parser {
     // 检查xhtml文件是否在spine中
     for (var entry in idToHMp.entries) {
       String mid = entry.key;
-      String mime = entry.value.item2; // MIME type
+      String mime = entry.value[1]; // MIME type (second item in the list)
       if (mime == "application/xhtml+xml" && !spineIdrefs.contains(mid)) {
         errorOPFLog.add(Tuple2('xhtml_not_in_spine', mid));
       }
     }
+
+
+
   }
 
   void _clearDuplicateIdHref() {
@@ -210,7 +214,7 @@ class Parser {
       hrefToId[href.toLowerCase()] = newId;
       String ext = path.extension(href).toLowerCase();
       String mime = mimeMap[ext] ?? "text/plain"; // 使用默认的MIME类型
-      idToHMp[newId] = Tuple3(href, mime, "");
+      idToHMp[newId] = [href, mime, ""];
     }
   }
 
@@ -314,10 +318,10 @@ class Parser {
     List<Tuple4<String, String, String, String>> manifestList =
         []; // (id, opfHref, mime, properties)
     for (var id in idToHMp.keys) {
-      var tuple = idToHMp[id]!;
-      var href = tuple.item1; // Accessing the first item of the tuple
-      var mime = tuple.item2; // Accessing the second item of the tuple
-      var properties = tuple.item3; // Accessing the third item of the tuple
+      var list = idToHMp[id]!;
+      var href = list[0]; // Accessing the first item in the list
+      var mime = list[1]; // Accessing the second item in the list
+      var properties = list[2]; // Accessing the third item in the list
       manifestList.add(Tuple4(id, href, mime, properties));
     }
 
@@ -332,11 +336,12 @@ class Parser {
     // Find EPUB2 TOC file ID; EPUB3 nav file is processed as XHTML
     tocPath = ""; // Assuming tocPath is a class-level variable
     tocId = ""; // Assuming tocId is a class-level variable
-    String? tocIdValue = packageElement.getAttribute('toc');
+    String? tocIdValue = etreeOpf.findAllElements("spine").first.getAttribute('toc');
+
     tocId = tocIdValue ?? "";
 
     // Classify OPF items
-    String opfDir = path.dirname(""); // Assuming you have a valid opfPath
+    String opfDir = path.dirname(opfPath); // Assuming you have a valid opfPath
     for (var item in manifestList) {
       String id = item.item1;
       String href = item.item2;
@@ -367,7 +372,8 @@ class Parser {
         resourceGroup.addVideo([id, href, properties]);
       } else if (tocId.isNotEmpty && id == tocId) {
         // 设置 TOC 路径
-        tocPath = bkPath;
+
+        tocPath = opfDir+"/"+href;
       } else {
         // 添加到 otherList
         resourceGroup.addOther([id, href, mime, properties]);
